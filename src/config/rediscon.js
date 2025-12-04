@@ -1,5 +1,5 @@
 import Redis from "ioredis";
-import { TTL_USERS, TTL_POSTS, TTL_COMMENTS } from './ttlconfig';
+import { TTL_USERS, TTL_POSTS, TTL_COMMENTS } from './ttlconfig.js';
 
 const redisUrl = process.env.REDIS_URL;
 const users_cache_name = process.env.USERS_TABLE_NAME;
@@ -96,6 +96,18 @@ async function redisGet(key) {
   }
 }
 
+async function redisExists(key) {
+  const client = await redisClient();
+  if (!client) return false;
+
+  try {
+    return (await client.exists(key)) === 1;
+  } catch (err) {
+    console.error("Redis EXISTS error:", err.message);
+    return false;
+  }
+}
+
 async function redisDel(key) {
   const client = await redisClient();
   if (!client) return false;
@@ -175,7 +187,9 @@ async function usersCacheClearTable() {
   return await redisClearPattern(`${users_cache_name}:*`);
 }
 
-
+async function usersCacheExists(key) {
+  return await redisExists(`${users_cache_name}:${key}`);
+}
 
 // Posts Cache Functions
 async function postsCacheGet(key) {
@@ -211,7 +225,9 @@ async function postsCacheClearTable() {
   return await redisClearPattern(`${posts_cache_name}:*`);
 }
 
-
+async function postsCacheExists(key) {
+  return await redisExists(`${posts_cache_name}:${key}`);
+}
 
 // Comments Cache Functions
 async function commentsCacheGet(key) {
@@ -247,8 +263,12 @@ async function commentsCacheClearTable() {
   return await redisClearPattern(`${comments_cache_name}:*`);
 }
 
+async function commentsCacheExists(key) {
+  return await redisExists(`${comments_cache_name}:${key}`);
+}
+
 export default { 
-  usersCacheSet,usersCacheMSet,usersCacheGet,usersCacheDel,usersCacheClearTable,
-  postsCacheSet,postsCacheMSet,postsCacheGet,postsCacheDel,postsCacheClearTable,
-  commentsCacheSet,commentsCacheMSet,commentsCacheGet,commentsCacheDel,commentsCacheClearTable
+  usersCacheSet,usersCacheMSet,usersCacheGet,usersCacheDel,usersCacheClearTable,usersCacheExists,
+  postsCacheSet,postsCacheMSet,postsCacheGet,postsCacheDel,postsCacheClearTable,postsCacheExists,
+  commentsCacheSet,commentsCacheMSet,commentsCacheGet,commentsCacheDel,commentsCacheClearTable,commentsCacheExists,
 };

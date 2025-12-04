@@ -71,6 +71,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/api/auth', authRoutes);
 
+
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
