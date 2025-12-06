@@ -540,7 +540,7 @@ class Post {
         // Delete all media files from ImageKit
         const deletePromises = post.media.map(async (mediaUrl) => {
             if(!(await deleteFileByUrl(mediaUrl)))
-              console.error(`Failed to delete media: ${mediaUrl}`, err.message);
+              console.error(`Failed to delete media: ${mediaUrl}`);
           }
         );
         await Promise.all(deletePromises);

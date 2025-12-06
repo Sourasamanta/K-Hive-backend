@@ -49,7 +49,7 @@ export async function deleteFileByUrl(fileUrl) {
   }
 
   try {
-    const urlEndpoint = process.env.IMAGEKIT_URL_ENDPOINT;
+    const urlEndpoint = process.env.IMAGEKIT_URL_DELIVERY;
     
     if (!fileUrl.startsWith(urlEndpoint)) {
       throw new Error("Invalid ImageKit URL");
@@ -60,8 +60,7 @@ export async function deleteFileByUrl(fileUrl) {
     
     // List files to find the fileId by filePath
     const files = await imagekitInstance.listFiles({
-      path: filePath,
-      limit: 1
+      searchQuery: `filePath="${filePath}"`
     });
 
     if (!files || files.length === 0) {
