@@ -22,6 +22,7 @@ export function getPresignedUploadUrl(expireInSeconds = 60, folder = 'k-hive') {
   const imagekitInstance = getImageKitInstance();
   
   if (!imagekitInstance) {
+    console.log("Imagekit Instance not Initialized");
     throw new Error("ImageKit not initialized");
   }
 
@@ -37,4 +38,44 @@ export function getPresignedUploadUrl(expireInSeconds = 60, folder = 'k-hive') {
     uploadUrl: `${process.env.IMAGEKIT_URL_ENDPOINT}/api/v1/files/upload`,
     folder: folder
   };
+}
+
+export async function deleteFileByUrl(fileUrl) {
+  const imagekitInstance = getImageKitInstance();
+  
+  if (!imagekitInstance) {
+    console.log("Imagekit Instance not Initialized");
+    return false;
+  }
+
+  try {
+    const urlEndpoint = process.env.IMAGEKIT_URL_ENDPOINT;
+    
+    if (!fileUrl.startsWith(urlEndpoint)) {
+      throw new Error("Invalid ImageKit URL");
+    }
+
+    // Get the file path after the endpoint
+    const filePath = fileUrl.replace(urlEndpoint, '').split('?')[0];
+    
+    // List files to find the fileId by filePath
+    const files = await imagekitInstance.listFiles({
+      path: filePath,
+      limit: 1
+    });
+
+    if (!files || files.length === 0) {
+      throw new Error("File not found");
+    }
+
+    const fileId = files[0].fileId;
+
+    // Delete the file
+    const result = await imagekitInstance.deleteFile(fileId);
+    
+    return true;
+  } catch (err) {
+    console.error("Error deleting file:", err.message);
+    return false;
+  }
 }

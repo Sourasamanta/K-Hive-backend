@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import mongocon from "../config/mongocon.js";
 import rediscon from "../config/rediscon.js";
+import { deleteFileByUrl } from "../config/imagekitcon.js";
 import User from "./User.js"
 
 class Post {
@@ -527,14 +528,28 @@ class Post {
   }
 
   // Delete post
-  static async deletePost(postId,userId) {
+  static async deletePost(postId, userId) {
     try {
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
+      // Get the post first to access media URLs
+      const post = await collection.findOne({ postId });
+      
+      if (post && post.media && post.media.length > 0) {
+        // Delete all media files from ImageKit
+        const deletePromises = post.media.map(async (mediaUrl) => {
+            if(!(await deleteFileByUrl(mediaUrl)))
+              console.error(`Failed to delete media: ${mediaUrl}`, err.message);
+          }
+        );
+        await Promise.all(deletePromises);
+      }
+
       const result = await collection.deleteOne({ postId });
       await rediscon.postsCacheDel(postId);
-      await User.removePost(userId,postId)
+      await User.removePost(userId, postId);
+      
       return result.deletedCount > 0;
     } catch (err) {
       console.error("Error deleting post:", err.message);
