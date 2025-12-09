@@ -134,7 +134,6 @@ class Post {
   // Populate user data for posts
   static async populateUserData(posts) {
     if (!posts || posts.length === 0) return posts;
-
     try {
       // Get unique user IDs
       const userIds = [...new Set(posts.map(post => post.userId))];
@@ -161,21 +160,22 @@ class Post {
       if (missingUserIds.length > 0) {
         const collection = await mongocon.usersCollection();
         if (collection) {
+          // Fetch full user documents (no projection)
           const users = await collection
             .find({ userId: { $in: missingUserIds } })
-            .project({ userId: 1, name: 1, avatarLink: 1 })
             .toArray();
           
-          // Cache the fetched users and add to map
+          // Cache the full user data and add limited fields to map
           const cachePairs = {};
           users.forEach(user => {
-            const userData = {
+            // Add only needed fields to response
+            userMap.set(user.userId, {
               userId: user.userId,
               name: user.name,
               avatarLink: user.avatarLink,
               role: user.role
-            };
-            userMap.set(user.userId, userData);
+            });
+            // Cache full user details
             cachePairs[user.userId] = user;
           });
           
@@ -190,7 +190,8 @@ class Post {
         ...post,
         user: userMap.get(post.userId) || { 
           userId: post.userId, 
-          name: 'Unknown User' 
+          name: 'Unknown User',
+          role: 'user'
         }
       }));
     } catch (err) {
