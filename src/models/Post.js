@@ -3,6 +3,7 @@ import mongocon from "../config/mongocon.js";
 import rediscon from "../config/rediscon.js";
 import { deleteFileByUrl } from "../config/imagekitcon.js";
 import User from "./User.js"
+import PrefixSearchService from '../services/prefixSearchService.js';
 import Vote from "./Vote.js"
 
 class Post {
@@ -100,7 +101,8 @@ class Post {
         const feedKey = Post.getFeedCacheKey("createdAt", -1);
         await rediscon.feedCachePushFront(feedKey, newPost.postId);
         await rediscon.feedCacheTrim(feedKey, 0, 49); // Keep 50 posts
-        
+        PrefixSearchService.indexPost(newPost);
+
         return newPost;
       }
       throw new Error("Failed to create post");
@@ -527,6 +529,25 @@ static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order
     }
   }
  
+  // Get posts by multiple user IDs (for autocomplete)
+  static async getPostsByUserIds(userIds, limit = 10) {
+    try {
+      const collection = await mongocon.postsCollection();
+      if (!collection) throw new Error("Database connection failed");
+
+      const posts = await collection
+        .find({ userId: { $in: userIds } })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .toArray();
+
+      return posts;
+    } catch (err) {
+      console.error("Error getting posts by user IDs:", err.message);
+      return [];
+    }
+  }
+  
   // Search posts by title or tags
   static async searchPosts(query, page = 1, limit = 10, sortby = "relevance") {
     try {
@@ -656,6 +677,10 @@ static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order
       const collection = await mongocon.postsCollection();
       if (!collection) throw new Error("Database connection failed");
 
+      //Get old post before update
+      const oldPost = await Post.findByPostId(postId);
+      if (!oldPost) return null;
+
       const allowedUpdates = {};
       if (updateData.title !== undefined) {
         allowedUpdates.title = updateData.title;
@@ -677,7 +702,9 @@ static async getAllPostsFromDB(page = 1, limit = 10, sortBy = "createdAt", order
 
       if (result.modifiedCount > 0) {
         await rediscon.postsCacheDel(postId);
-        return await Post.findByPostId(postId);
+        const updatedPost = await Post.findByPostId(postId);
+        PrefixSearchService.updatePostIndex(oldPost, updatedPost);
+        return updatedPost;
       }
 
       return null;
@@ -970,6 +997,7 @@ static async upvote(postId) {
       if (!collection) throw new Error("Database connection failed");
 
       const post = await collection.findOne({ postId });
+      if (!post) return false;
       
       if (post && post.media && post.media.length > 0) {
         const deletePromises = post.media.map(async (mediaUrl) => {
@@ -997,6 +1025,8 @@ static async upvote(postId) {
         // Invalidate total count cache
         await rediscon.feedCacheClear("posts:total:createdAt");
         await rediscon.feedCacheClear("posts:total:upvotes");
+
+        PrefixSearchService.removePostIndex(post);
         Vote.deleteVotesByPostId(postId)
       }
       
