@@ -267,47 +267,38 @@ class Vote {
 
   // Remove vote (set to neutral)
   static async removeVote(postId, userId) {
-    try {
-      const collection = await mongocon.postvoteCollection();
-      if (!collection) throw new Error("Database connection failed");
+  try {
+    const collection = await mongocon.postvoteCollection();
+    if (!collection) throw new Error("Database connection failed");
 
-      const voteId = Vote.getVoteKey(postId, userId);
-      const existingVote = await Vote.findVote(postId, userId);
+    const voteId = Vote.getVoteKey(postId, userId);
+    const existingVote = await Vote.findVote(postId, userId);
 
-      if (!existingVote || existingVote.vote === 0) {
-        return { success: true, action: "no_change", previousVote: 0, newVote: 0 };
-      }
-
-      const previousVote = existingVote.vote;
-
-      await collection.updateOne(
-        { voteId },
-        {
-          $set: {
-            vote: 0,
-            updatedAt: new Date(),
-          },
-        }
-      );
-
-      // Update cache
-      existingVote.vote = 0;
-      existingVote.updatedAt = new Date();
-      await rediscon.postsCacheSet(`vote:${voteId}`, existingVote);
-
-      // Update post counts
-      if (previousVote === 1) {
-        await Post.removeUpvote(postId);
-      } else if (previousVote === -1) {
-        await Post.removeDownvote(postId);
-      }
-
-      return { success: true, action: "removed_vote", previousVote, newVote: 0 };
-    } catch (err) {
-      console.error("Error removing vote:", err.message);
-      throw err;
+    if (!existingVote || existingVote.vote === 0) {
+      return { success: true, action: "no_change", previousVote: 0, newVote: 0 };
     }
+
+    const previousVote = existingVote.vote;
+
+    // Delete the vote entry instead of setting to 0
+    await collection.deleteOne({ voteId });
+
+    // Clear cache
+    await rediscon.postsCacheDel(`vote:${voteId}`);
+
+    // Update post counts
+    if (previousVote === 1) {
+      await Post.removeUpvote(postId);
+    } else if (previousVote === -1) {
+      await Post.removeDownvote(postId);
+    }
+
+    return { success: true, action: "removed_vote", previousVote, newVote: 0 };
+  } catch (err) {
+    console.error("Error removing vote:", err.message);
+    throw err;
   }
+}
 
   // Get user's vote on a post
   static async getUserVote(postId, userId) {
