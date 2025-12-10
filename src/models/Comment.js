@@ -84,17 +84,16 @@ class Comment {
     if (collection) {
       const users = await collection
         .find({ userId: { $in: missingUserIds } })
-        .project({
-          userId: 1,
-          name: 1,
-          avatarLink: 1,
-          role: 1
-        })
         .toArray();
 
       const cachePairs = {};
       users.forEach(user => {
-        userMap.set(user.userId, user);
+         userMap.set(user.userId, {
+              userId: user.userId,
+              name: user.name,
+              avatarLink: user.avatarLink,
+              role: user.role
+            });
         cachePairs[user.userId] = user;
       });
 
@@ -138,29 +137,26 @@ class Comment {
 
   // Get comments by post ID with pagination
   static async getCommentsByPostId(postId, page = 1, limit = 20) {
-    try {
-      // First, try to get commentIds from Post collection
-      const post = await Post.findByPostId(postId);
-      
-      if (post && post.commentIds && post.commentIds.length > 0) {
-        // Post exists and has comments in commentIds array
-        const skip = (page - 1) * limit;
-        const paginatedCommentIds = post.commentIds.slice(skip, skip + limit);
+  try {
+    // First, try to get commentIds from Post collection
+    const post = await Post.findByPostId(postId);
+    
+    if (post && post.commentIds && post.commentIds.length > 0) {
+      const allCommentIds = post.commentIds;
+      const topLevelComments = [];
+      let currentIndex = (page - 1) * limit;
+      const batchSize = limit;
 
-        if (paginatedCommentIds.length === 0) {
-          return {
-            comments: [],
-            pagination: {
-              page,
-              limit,
-              total: post.commentIds.length,
-              totalPages: Math.ceil(post.commentIds.length / limit),
-            },
-          };
-        }
+      // Keep fetching batches until we have enough top-level comments or run out of IDs
+      while (topLevelComments.length < limit && currentIndex < allCommentIds.length) {
+        // Get next batch of comment IDs
+        const batchCommentIds = allCommentIds.slice(currentIndex, currentIndex + batchSize);
+        currentIndex += batchSize;
+
+        if (batchCommentIds.length === 0) break;
 
         // Check which comments exist in Redis cache
-        const cacheCheckPromises = paginatedCommentIds.map(async commentId => ({
+        const cacheCheckPromises = batchCommentIds.map(async commentId => ({
           commentId,
           inCache: await rediscon.commentsCacheExists(commentId)
         }));
@@ -191,94 +187,121 @@ class Comment {
           nonCachedComments = await collection
             .find({ commentId: { $in: nonCachedCommentIds } })
             .toArray();
-
-          // Cache the newly fetched comments
-          if (nonCachedComments.length > 0) {
-            const cachePairs = {};
-            nonCachedComments.forEach((comment) => {
-              cachePairs[comment.commentId] = comment;
-            });
-            await rediscon.commentsCacheMSet(cachePairs);
-          }
         }
 
         // Combine cached and non-cached comments
-        const allComments = [...cachedComments, ...nonCachedComments];
+        const batchComments = [...cachedComments, ...nonCachedComments];
 
-        // Sort comments in the same order as paginatedCommentIds
-        const commentsMap = new Map(allComments.map(comment => [comment.commentId, comment]));
-        const orderedComments = paginatedCommentIds
+        // Create a map and maintain order
+        const commentsMap = new Map(batchComments.map(comment => [comment.commentId, comment]));
+        
+        // Filter this batch for top-level comments only
+        const batchTopLevelComments = batchCommentIds
           .map(id => commentsMap.get(id))
-          .filter(comment => comment && !comment.isDeleted);
+          .filter(comment => comment && !comment.isDeleted && !comment.parentCommentId);
 
-        const populated = await Comment.populateUserData(orderedComments);
-        return {
-          comments: populated,
-          pagination: {
-            page,
-            limit,
-            total: post.commentIds.length,
-            totalPages: Math.ceil(post.commentIds.length / limit),
-          },
-        };
+        // Add to our collection
+        topLevelComments.push(...batchTopLevelComments);
       }
 
-      // Fallback: Post doesn't exist or commentIds array is empty
-      // Query comments collection directly
-      const collection = await mongocon.commentsCollection();
-      if (!collection) throw new Error("Database connection failed");
+      // Trim to exact limit if we fetched more
+      const finalComments = topLevelComments.slice(0, limit);
 
-      const skip = (page - 1) * limit;
-
-      const result = await collection.aggregate([
-        {
-          $match: { 
-            postId: ObjectId.createFromHexString(postId),
-            parentCommentId: null,
-            isDeleted: false
-          }
-        },
-        {
-          $facet: {
-            comments: [
-              { $sort: { createdAt: -1 } },
-              { $skip: skip },
-              { $limit: limit }
-            ],
-            totalCount: [
-              { $count: "count" }
-            ]
-          }
-        }
-      ]).toArray();
-
-      const comments = result[0].comments;
-      const total = result[0].totalCount[0]?.count || 0;
-
-      // Cache fetched comments
-      if (comments.length > 0) {
+      // Cache only the final returning comments
+      if (finalComments.length > 0) {
         const cachePairs = {};
-        comments.forEach((comment) => {
+        finalComments.forEach((comment) => {
           cachePairs[comment.commentId] = comment;
         });
         await rediscon.commentsCacheMSet(cachePairs);
       }
 
+      // Calculate total count of top-level comments (we need to check all)
+      // This is expensive but necessary for accurate pagination
+      let totalTopLevelCount = 0;
+      for (const commentId of allCommentIds) {
+        const comment = await rediscon.commentsCacheExists(commentId) 
+          ? await rediscon.commentsCacheGet(commentId)
+          : null;
+        
+        if (!comment) {
+          const collection = await mongocon.commentsCollection();
+          const dbComment = await collection.findOne({ commentId });
+          if (dbComment && !dbComment.isDeleted && !dbComment.parentCommentId) {
+            totalTopLevelCount++;
+          }
+        } else if (!comment.isDeleted && !comment.parentCommentId) {
+          totalTopLevelCount++;
+        }
+      }
+
+      const populated = await Comment.populateUserData(finalComments);
       return {
-        comments,
+        comments: populated,
         pagination: {
           page,
           limit,
-          total,
-          totalPages: Math.ceil(total / limit),
+          total: totalTopLevelCount,
+          totalPages: Math.ceil(totalTopLevelCount / limit),
         },
       };
-    } catch (err) {
-      console.error("Error getting comments by post ID:", err.message);
-      throw err;
     }
-  }
 
+    // Fallback: Post doesn't exist or commentIds array is empty
+    // Query comments collection directly
+    const collection = await mongocon.commentsCollection();
+    if (!collection) throw new Error("Database connection failed");
+
+    const skip = (page - 1) * limit;
+
+    const result = await collection.aggregate([
+      {
+        $match: { 
+          postId: ObjectId.createFromHexString(postId),
+          parentCommentId: null,
+          isDeleted: false
+        }
+      },
+      {
+        $facet: {
+          comments: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limit }
+          ],
+          totalCount: [
+            { $count: "count" }
+          ]
+        }
+      }
+    ]).toArray();
+
+    const comments = result[0].comments;
+    const total = result[0].totalCount[0]?.count || 0;
+
+    // Cache fetched comments
+    if (comments.length > 0) {
+      const cachePairs = {};
+      comments.forEach((comment) => {
+        cachePairs[comment.commentId] = comment;
+      });
+      await rediscon.commentsCacheMSet(cachePairs);
+    }
+
+    return {
+      comments,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  } catch (err) {
+    console.error("Error getting comments by post ID:", err.message);
+    throw err;
+  }
+}
   // Get replies to a specific comment
 static async getRepliesByCommentId(parentCommentId, page = 1, limit = 10) {
   try {
